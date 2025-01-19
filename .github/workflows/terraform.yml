@@ -1,160 +1,95 @@
-name: 'Terraform'
+trigger:
+- main  # Trigger pipeline on changes to the main branch
 
-on:
-  workflow_dispatch:
-    inputs:
-      tfvars_file:
-        description: 'Path to the .tfvars file'
-        required: true
-        default: 'dev.tfvars'
-      action:
-        type: choice
-        description: 'Apply or Destroy'
-        options:
-        - plan
-        - apply
-        - destroy
-        required: true
-        default: 'apply'
+variables:
+  terraformVersion: '1.8.4'
+  azureSubscription: '<YOUR_AZURE_SERVICE_CONNECTION>'
+  tfvarsFile: 'dev.tfvars'
+  aksWorkingDirectory: 'aks'
 
-env:
-      AWS_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+stages:
 
-permissions:
-  contents: read
+# ===================== CI STAGES =====================
 
-jobs:
-  
-    # name: 'Terraform'
-    # uses: actions/checkout@v4
-    # runs-on: ubuntu-latest
-    # environment: production
-
-    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
-    # defaults:
-    #   run:
-    #     shell: bash
-    #     working-directory: eks
-
-        
-
-  CheckOut-Repo:
-    runs-on: ubuntu-latest
-    environment: production
-
-    defaults:
-      run:
-        shell: bash
-        working-directory: eks
-
-    env:
-      AWS_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    
-    
-    # needs: terraform
-    
+- stage: Build
+  displayName: "Build Application"
+  jobs:
+  - job: BuildJob
+    displayName: "Build and Package Application"
+    pool:
+      vmImage: 'ubuntu-latest'
     steps:
-    # Checkout the repository to the GitHub Actions runner
-    - name: Checkout
-      uses: actions/checkout@v4
+    - task: UseNode@2
+      inputs:
+        version: '16.x'
+      displayName: "Setup Node.js"
+    - script: |
+        npm install
+        npm run build
+      displayName: "Build Application"
 
-  Setting-Up-Terraform:
-    runs-on: ubuntu-latest
-    
-    needs: CheckOut-Repo
-
+- stage: Test
+  displayName: "Run Unit Tests"
+  dependsOn: Build
+  jobs:
+  - job: TestJob
+    displayName: "Execute Unit Tests"
+    pool:
+      vmImage: 'ubuntu-latest'
     steps:
-    # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: 1.8.4
+    - script: |
+        npm run test
+      displayName: "Run Tests"
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFiles: '**/test-results.xml'
+      displayName: "Publish Test Results"
 
-  Terraform-Initializing:
-    runs-on: ubuntu-latest
+# ===================== CD STAGES =====================
 
-    needs: Setting-Up-Terraform
-
+- stage: Provision
+  displayName: "Provision AKS Cluster"
+  dependsOn: Test
+  jobs:
+  - job: ProvisionJob
+    displayName: "Terraform - Provision AKS"
+    pool:
+      vmImage: 'ubuntu-latest'
     steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(azureSubscription)
+      displayName: "Login to Azure"
+    - script: |
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+        sudo apt update && sudo apt install -y terraform=$(terraformVersion)
+      displayName: "Install Terraform"
+    - script: |
+        terraform init
+        terraform plan -var-file=$(tfvarsFile)
+        terraform apply -var-file=$(tfvarsFile) -auto-approve
+      workingDirectory: $(aksWorkingDirectory)
+      displayName: "Terraform - Apply AKS"
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: 1.8.4
-        
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
-    - name: Terraform Init
-      working-directory: eks
-      run: terraform init
-
-  Terraform-Formatting-Validating:
-    runs-on: ubuntu-latest
-    needs: Terraform-Initializing
-
+- stage: Deploy
+  displayName: "Deploy Application to AKS"
+  dependsOn: Provision
+  jobs:
+  - job: DeployJob
+    displayName: "Deploy Application"
+    pool:
+      vmImage: 'ubuntu-latest'
     steps:
-        
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: 1.8.4
-        
-    - name: Terraform Init
-      working-directory: eks
-      run: terraform init
-      
-    # Checks that all Terraform configuration files adhere to a canonical format
-    - name: Terraform Format
-      working-directory: eks
-      run: terraform fmt
-
-    - name: Terraform Validate
-      working-directory: eks
-      run: terraform validate
-
-  Terraform-Action:
-    runs-on: ubuntu-latest
-    needs: Terraform-Formatting-Validating
-    
-    steps:
-
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: 1.8.4
-
-    - name: Terraform Init
-      working-directory: eks
-      run: terraform init
-
-      
-    - name: Terraform Plan
-      if: ${{ github.event.inputs.action  == 'plan' }}
-      working-directory: eks
-      # Generates an execution plan for Terraform
-      run: |
-        terraform plan -var-file=${{ github.event.inputs.tfvars_file }} -input=false
-
-    
-      # Apply the Terraform Configuration according to the parameter
-    - name: Terraform Action
-      if: ${{ github.event.inputs.action  == 'apply' }}
-      working-directory: eks
-      run: terraform ${{ github.event.inputs.action }} -auto-approve -var-file=${{ github.event.inputs.tfvars_file }} -input=false
-
-    - name: Terraform Destroy
-      if: ${{ github.event.inputs.action == 'destroy' }}
-      working-directory: eks
-      run: terraform ${{ github.event.inputs.action }} -auto-approve -var-file=${{ github.event.inputs.tfvars_file }} -input=false
+    - task: Kubernetes@1
+      inputs:
+        connectionType: 'Azure Resource Manager'
+        azureSubscription: $(azureSubscription)
+        azureResourceGroup: '<YOUR_RESOURCE_GROUP>'
+        kubernetesCluster: '<YOUR_AKS_CLUSTER>'
+        namespace: 'default'
+      displayName: "Connect to AKS"
+    - script: |
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+      displayName: "Deploy to AKS"
