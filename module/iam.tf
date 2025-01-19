@@ -1,97 +1,107 @@
 locals {
-  cluster_name = var.cluster-name
+  cluster_name = var.cluster_name
 }
 
+# Random Suffix for Unique Resource Naming
 resource "random_integer" "random_suffix" {
   min = 1000
   max = 9999
 }
 
-resource "aws_iam_role" "eks-cluster-role" {
-  count = var.is_eks_role_enabled ? 1 : 0
-  name  = "${local.cluster_name}-role-${random_integer.random_suffix.result}"
+# Azure Kubernetes Service (AKS) Cluster Managed Identity Role
+resource "azurerm_role_assignment" "aks_cluster_role_assignment" {
+  count = var.is_aks_role_enabled ? 1 : 0
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "eks.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
+  principal_id         = azurerm_kubernetes_cluster.aks.identity[0].principal_id
+  role_definition_name = "Contributor" # Assign Contributor role for full cluster control
+  scope                = data.azurerm_subscription.primary.id
 }
 
-resource "aws_iam_role_policy_attachment" "AmazonEKSClusterPolicy" {
-  count      = var.is_eks_role_enabled ? 1 : 0
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.eks-cluster-role[count.index].name
+# AKS Node Group Identity Role
+resource "azurerm_user_assigned_identity" "aks_nodegroup_identity" {
+  count    = var.is_aks_nodegroup_role_enabled ? 1 : 0
+  name     = "${local.cluster_name}-nodegroup-identity-${random_integer.random_suffix.result}"
+  location = var.location
+  resource_group_name = var.resource_group_name
 }
 
-resource "aws_iam_role" "eks-nodegroup-role" {
-  count = var.is_eks_nodegroup_role_enabled ? 1 : 0
-  name  = "${local.cluster_name}-nodegroup-role-${random_integer.random_suffix.result}"
+# Role Assignment for Node Group Identity
+resource "azurerm_role_assignment" "aks_nodegroup_contributor_role" {
+  count = var.is_aks_nodegroup_role_enabled ? 1 : 0
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "ec2.amazonaws.com"
-      }
-    }]
-  })
+  principal_id         = azurerm_user_assigned_identity.aks_nodegroup_identity[count.index].principal_id
+  role_definition_name = "Contributor"
+  scope                = data.azurerm_subscription.primary.id
 }
 
-resource "aws_iam_role_policy_attachment" "eks-AmazonWorkerNodePolicy" {
-  count      = var.is_eks_nodegroup_role_enabled ? 1 : 0
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.eks-nodegroup-role[count.index].name
+# Assign Reader Role for Node Pool Networking
+resource "azurerm_role_assignment" "aks_nodegroup_reader_role" {
+  count = var.is_aks_nodegroup_role_enabled ? 1 : 0
+
+  principal_id         = azurerm_user_assigned_identity.aks_nodegroup_identity[count.index].principal_id
+  role_definition_name = "Reader"
+  scope                = data.azurerm_virtual_network.vnet.id
 }
 
-resource "aws_iam_role_policy_attachment" "eks-AmazonEKS_CNI_Policy" {
-  count      = var.is_eks_nodegroup_role_enabled ? 1 : 0
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-  role       = aws_iam_role.eks-nodegroup-role[count.index].name
-}
-resource "aws_iam_role_policy_attachment" "eks-AmazonEC2ContainerRegistryReadOnly" {
-  count      = var.is_eks_nodegroup_role_enabled ? 1 : 0
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-  role       = aws_iam_role.eks-nodegroup-role[count.index].name
+# AKS Managed Identity Integration for Add-Ons
+resource "azurerm_role_assignment" "aks_addons_role_assignment" {
+  count = var.is_aks_role_enabled ? 1 : 0
+
+  principal_id         = azurerm_kubernetes_cluster.aks.identity[0].principal_id
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = data.azurerm_storage_account.aks_storage_account.id
 }
 
-resource "aws_iam_role_policy_attachment" "eks-AmazonEBSCSIDriverPolicy" {
-  count      = var.is_eks_nodegroup_role_enabled ? 1 : 0
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-  role       = aws_iam_role.eks-nodegroup-role[count.index].name
+# Azure Kubernetes Cluster with Role Assignments
+resource "azurerm_kubernetes_cluster" "aks" {
+  name                = var.cluster_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  kubernetes_version  = var.cluster_version
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  default_node_pool {
+    name       = "default"
+    node_count = var.default_node_count
+    vm_size    = var.default_vm_size
+  }
+
+  tags = {
+    Name = var.cluster_name
+    Env  = var.env
+  }
+
+  depends_on = [
+    azurerm_role_assignment.aks_cluster_role_assignment
+  ]
 }
 
-# OIDC
-resource "aws_iam_role" "eks_oidc" {
-  assume_role_policy = data.aws_iam_policy_document.eks_oidc_assume_role_policy.json
-  name               = "eks-oidc"
+# Custom Role for OIDC Equivalent (Example Policy)
+resource "azurerm_role_definition" "aks_oidc_role" {
+  name        = "${local.cluster_name}-oidc-role"
+  scope       = data.azurerm_subscription.primary.id
+  description = "Custom role for OIDC-equivalent functionality"
+
+  permissions {
+    actions = [
+      "Microsoft.ContainerService/managedClusters/*",
+      "Microsoft.Storage/storageAccounts/*",
+      "Microsoft.Network/virtualNetworks/*"
+    ]
+    not_actions = []
+  }
+
+  assignable_scopes = [
+    data.azurerm_subscription.primary.id
+  ]
 }
 
-resource "aws_iam_policy" "eks-oidc-policy" {
-  name = "test-policy"
-
-  policy = jsonencode({
-    Statement = [{
-      Action = [
-        "s3:ListAllMyBuckets",
-        "s3:GetBucketLocation",
-        "*"
-      ]
-      Effect   = "Allow"
-      Resource = "*"
-    }]
-    Version = "2012-10-17"
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "eks-oidc-policy-attach" {
-  role       = aws_iam_role.eks_oidc.name
-  policy_arn = aws_iam_policy.eks-oidc-policy.arn
+# Assign Custom Role for OIDC Functionality
+resource "azurerm_role_assignment" "aks_oidc_role_assignment" {
+  role_definition_name = azurerm_role_definition.aks_oidc_role.name
+  principal_id         = azurerm_kubernetes_cluster.aks.identity[0].principal_id
+  scope                = data.azurerm_subscription.primary.id
 }
