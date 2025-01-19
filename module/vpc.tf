@@ -1,169 +1,163 @@
 locals {
-  cluster-name = var.cluster-name
+  cluster_name = var.cluster_name
 }
 
-resource "aws_vpc" "vpc" {
-  cidr_block           = var.cidr-block
-  instance_tenancy     = "default"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+# Virtual Network
+resource "azurerm_virtual_network" "vnet" {
+  name                = var.vnet_name
+  address_space       = [var.address_space]
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
 
   tags = {
-    Name = var.vpc-name
+    Name = var.vnet_name
     Env  = var.env
-
   }
 }
 
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.vpc.id
+# Subnets
+resource "azurerm_subnet" "public_subnet" {
+  count                = var.pub_subnet_count
+  name                 = "${var.pub_subnet_name}-${count.index + 1}"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = [element(var.pub_address_space, count.index)]
+
+  delegation {
+    name = "aks"
+    service_delegation {
+      name = "Microsoft.ContainerService/managedClusters"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/action",
+      ]
+    }
+  }
 
   tags = {
-    Name                                          = var.igw-name
-    env                                           = var.env
-    "kubernetes.io/cluster/${local.cluster-name}" = "owned"
+    Name = "${var.pub_subnet_name}-${count.index + 1}"
+    Env  = var.env
+    "kubernetes.io/role/elb" = "1"
   }
-
-  depends_on = [aws_vpc.vpc]
 }
 
-resource "aws_subnet" "public-subnet" {
-  count                   = var.pub-subnet-count
-  vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = element(var.pub-cidr-block, count.index)
-  availability_zone       = element(var.pub-availability-zone, count.index)
-  map_public_ip_on_launch = true
+resource "azurerm_subnet" "private_subnet" {
+  count                = var.pri_subnet_count
+  name                 = "${var.pri_subnet_name}-${count.index + 1}"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = [element(var.pri_address_space, count.index)]
 
   tags = {
-    Name                                          = "${var.pub-sub-name}-${count.index + 1}"
-    Env                                           = var.env
-    "kubernetes.io/cluster/${local.cluster-name}" = "owned"
-    "kubernetes.io/role/elb"                      = "1"
+    Name = "${var.pri_subnet_name}-${count.index + 1}"
+    Env  = var.env
+    "kubernetes.io/role/internal-elb" = "1"
   }
-
-  depends_on = [aws_vpc.vpc,
-  ]
 }
 
-resource "aws_subnet" "private-subnet" {
-  count                   = var.pri-subnet-count
-  vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = element(var.pri-cidr-block, count.index)
-  availability_zone       = element(var.pri-availability-zone, count.index)
-  map_public_ip_on_launch = false
+# Public IP for NAT Gateway
+resource "azurerm_public_ip" "ngw_eip" {
+  name                = var.eip_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
 
   tags = {
-    Name                                          = "${var.pri-sub-name}-${count.index + 1}"
-    Env                                           = var.env
-    "kubernetes.io/cluster/${local.cluster-name}" = "owned"
-    "kubernetes.io/role/internal-elb"             = "1"
+    Name = var.eip_name
   }
-
-  depends_on = [aws_vpc.vpc,
-  ]
 }
 
+# NAT Gateway
+resource "azurerm_nat_gateway" "ngw" {
+  name                = var.ngw_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
 
-resource "aws_route_table" "public-rt" {
-  vpc_id = aws_vpc.vpc.id
+  public_ip {
+    id = azurerm_public_ip.ngw_eip.id
+  }
+
+  tags = {
+    Name = var.ngw_name
+  }
+}
+
+# Route Table for Public Subnets
+resource "azurerm_route_table" "public_rt" {
+  name                = var.public_route_table_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  tags = {
+    Name = var.public_route_table_name
+    Env  = var.env
+  }
+}
+
+# Route Table for Private Subnets
+resource "azurerm_route_table" "private_rt" {
+  name                = var.private_route_table_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
 
   route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
+    name                   = "default-route"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "Internet"
+    next_hop_in_ip_address = azurerm_nat_gateway.ngw.public_ip[0].ip_address
   }
 
   tags = {
-    Name = var.public-rt-name
-    env  = var.env
+    Name = var.private_route_table_name
+    Env  = var.env
+  }
+}
+
+# Associate Subnets with Route Tables
+resource "azurerm_subnet_route_table_association" "public_rt_assoc" {
+  count          = var.pub_subnet_count
+  subnet_id      = azurerm_subnet.public_subnet[count.index].id
+  route_table_id = azurerm_route_table.public_rt.id
+}
+
+resource "azurerm_subnet_route_table_association" "private_rt_assoc" {
+  count          = var.pri_subnet_count
+  subnet_id      = azurerm_subnet.private_subnet[count.index].id
+  route_table_id = azurerm_route_table.private_rt.id
+}
+
+# Network Security Group
+resource "azurerm_network_security_group" "aks_sg" {
+  name                = var.eks_sg
+  location            = var.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "Allow-HTTPS"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "0.0.0.0/0" # Replace with a specific IP range
+    destination_address_prefix = "*"
   }
 
-  depends_on = [aws_vpc.vpc
-  ]
-}
-
-resource "aws_route_table_association" "name" {
-  count          = 3
-  route_table_id = aws_route_table.public-rt.id
-  subnet_id      = aws_subnet.public-subnet[count.index].id
-
-  depends_on = [aws_vpc.vpc,
-    aws_subnet.public-subnet
-  ]
-}
-
-resource "aws_eip" "ngw-eip" {
-  domain = "vpc"
-
-  tags = {
-    Name = var.eip-name
-  }
-
-  depends_on = [aws_vpc.vpc
-  ]
-
-}
-
-resource "aws_nat_gateway" "ngw" {
-  allocation_id = aws_eip.ngw-eip.id
-  subnet_id     = aws_subnet.public-subnet[0].id
-
-  tags = {
-    Name = var.ngw-name
-  }
-
-  depends_on = [aws_vpc.vpc,
-    aws_eip.ngw-eip
-  ]
-}
-
-resource "aws_route_table" "private-rt" {
-  vpc_id = aws_vpc.vpc.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.ngw.id
+  security_rule {
+    name                       = "Allow-All-Outbound"
+    priority                   = 200
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "*"
+    destination_address_prefix = "0.0.0.0/0"
   }
 
   tags = {
-    Name = var.private-rt-name
-    env  = var.env
-  }
-
-  depends_on = [aws_vpc.vpc,
-  ]
-}
-
-resource "aws_route_table_association" "private-rt-association" {
-  count          = 3
-  route_table_id = aws_route_table.private-rt.id
-  subnet_id      = aws_subnet.private-subnet[count.index].id
-
-  depends_on = [aws_vpc.vpc,
-    aws_subnet.private-subnet
-  ]
-}
-
-resource "aws_security_group" "eks-cluster-sg" {
-  name        = var.eks-sg
-  description = "Allow 443 from Jump Server only"
-
-  vpc_id = aws_vpc.vpc.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] // It should be specific IP range
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = var.eks-sg
+    Name = var.eks_sg
   }
 }
