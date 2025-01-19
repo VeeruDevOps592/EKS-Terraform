@@ -1,51 +1,67 @@
-variable "cluster-name" {}
-variable "cidr-block" {}
-variable "vpc-name" {}
+# General Variables
+variable "cluster_name" {}
+variable "address_space" {} # Equivalent to cidr-block in Azure
+variable "vnet_name" {} # Equivalent to vpc-name
 variable "env" {}
-variable "igw-name" {}
-variable "pub-subnet-count" {}
-variable "pub-cidr-block" {
-  type = list(string)
-}
-variable "pub-availability-zone" {
-  type = list(string)
-}
-variable "pub-sub-name" {}
-variable "pri-subnet-count" {}
-variable "pri-cidr-block" {
-  type = list(string)
-}
-variable "pri-availability-zone" {
-  type = list(string)
-}
-variable "pri-sub-name" {}
-variable "public-rt-name" {}
-variable "private-rt-name" {}
-variable "eip-name" {}
-variable "ngw-name" {}
-variable "eks-sg" {}
+variable "location" {} # Azure requires specifying a region
 
-#IAM
-variable "is_eks_role_enabled" {
+# Public Subnet Variables
+variable "pub_subnet_count" {}
+variable "pub_address_space" { # Equivalent to pub-cidr-block
+  type = list(string)
+}
+variable "pub_subnet_name" {} # Equivalent to pub-sub-name
+
+# Private Subnet Variables
+variable "pri_subnet_count" {}
+variable "pri_address_space" { # Equivalent to pri-cidr-block
+  type = list(string)
+}
+variable "pri_subnet_name" {} # Equivalent to pri-sub-name
+
+# Route Table Variables
+variable "public_route_table_name" {}
+variable "private_route_table_name" {}
+
+# Network Gateway Variables
+variable "ngw_name" {}
+
+# Security Group
+variable "aks_nsg_name" {}
+
+# Managed Identity
+variable "is_aks_role_enabled" {
   type = bool
 }
-variable "is_eks_nodegroup_role_enabled" {
+variable "is_aks_nodegroup_role_enabled" {
   type = bool
 }
 
-# EKS
-variable "is-eks-cluster-enabled" {}
-variable "cluster-version" {}
-variable "endpoint-private-access" {}
-variable "endpoint-public-access" {}
-variable "addons" {
+# AKS Cluster Variables
+variable "is_aks_cluster_enabled" {}
+variable "cluster_version" {}
+variable "private_cluster_enabled" {
+  type    = bool
+  default = false
+}
+variable "addon_profiles" { # Equivalent to addons
   type = list(object({
     name    = string
     version = string
   }))
 }
-variable "ondemand_instance_types" {}
-variable "spot_instance_types" {}
+
+# Node Pool Variables
+variable "node_pool_vm_size" {
+  type    = string
+  default = "Standard_DS2_v2"
+}
+variable "ondemand_instance_types" {
+  type = list(string)
+}
+variable "spot_instance_types" {
+  type = list(string)
+}
 variable "desired_capacity_on_demand" {}
 variable "min_capacity_on_demand" {}
 variable "max_capacity_on_demand" {}
