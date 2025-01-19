@@ -3,42 +3,45 @@ locals {
   env = var.env
 }
 
-module "eks" {
-  source = "../module"
+module "aks" {
+  source = "../module" # Update this to your AKS module's path
 
   env                   = var.env
-  cluster-name          = "${local.env}-${local.org}-${var.cluster-name}"
-  cidr-block            = var.vpc-cidr-block
-  vpc-name              = "${local.env}-${local.org}-${var.vpc-name}"
-  igw-name              = "${local.env}-${local.org}-${var.igw-name}"
-  pub-subnet-count      = var.pub-subnet-count
-  pub-cidr-block        = var.pub-cidr-block
-  pub-availability-zone = var.pub-availability-zone
-  pub-sub-name          = "${local.env}-${local.org}-${var.pub-sub-name}"
-  pri-subnet-count      = var.pri-subnet-count
-  pri-cidr-block        = var.pri-cidr-block
-  pri-availability-zone = var.pri-availability-zone
-  pri-sub-name          = "${local.env}-${local.org}-${var.pri-sub-name}"
-  public-rt-name        = "${local.env}-${local.org}-${var.public-rt-name}"
-  private-rt-name       = "${local.env}-${local.org}-${var.private-rt-name}"
-  eip-name              = "${local.env}-${local.org}-${var.eip-name}"
-  ngw-name              = "${local.env}-${local.org}-${var.ngw-name}"
-  eks-sg                = var.eks-sg
+  resource_group_name   = "${local.env}-${local.org}-rg"
+  aks_cluster_name      = "${local.env}-${local.org}-${var.cluster_name}"
+  location              = var.location
+  vnet_name             = "${local.env}-${local.org}-vnet"
+  vnet_cidr             = var.vnet_cidr
+  subnet_name           = "${local.env}-${local.org}-${var.subnet_name}"
+  subnet_cidr           = var.subnet_cidr
 
-  is_eks_role_enabled           = true
-  is_eks_nodegroup_role_enabled = true
-  ondemand_instance_types       = var.ondemand_instance_types
-  spot_instance_types           = var.spot_instance_types
-  desired_capacity_on_demand    = var.desired_capacity_on_demand
-  min_capacity_on_demand        = var.min_capacity_on_demand
-  max_capacity_on_demand        = var.max_capacity_on_demand
-  desired_capacity_spot         = var.desired_capacity_spot
-  min_capacity_spot             = var.min_capacity_spot
-  max_capacity_spot             = var.max_capacity_spot
-  is-eks-cluster-enabled        = var.is-eks-cluster-enabled
-  cluster-version               = var.cluster-version
-  endpoint-private-access       = var.endpoint-private-access
-  endpoint-public-access        = var.endpoint-public-access
+  # AKS-specific configurations
+  kubernetes_version    = var.kubernetes_version
+  dns_prefix            = "${local.env}-${local.org}-${var.dns_prefix}"
+  node_pool_name        = var.node_pool_name
+  node_count            = var.node_count
+  min_count             = var.min_count
+  max_count             = var.max_count
+  vm_size               = var.vm_size
+  enable_http_application_routing = var.enable_http_application_routing
+  enable_monitoring     = var.enable_monitoring
+  enable_rbac           = var.enable_rbac
 
+  # Network configurations
+  network_profile = {
+    network_plugin    = var.network_plugin
+    network_policy    = var.network_policy
+    service_cidr      = var.service_cidr
+    dns_service_ip    = var.dns_service_ip
+    docker_bridge_cidr = var.docker_bridge_cidr
+  }
+
+  # Addons and integrations
   addons = var.addons
+
+  # Tags
+  tags = {
+    environment = local.env
+    organization = local.org
+  }
 }
