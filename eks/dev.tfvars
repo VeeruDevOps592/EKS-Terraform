@@ -1,52 +1,56 @@
-env                   = "dev"
-aws-region            = "us-east-1"
-vpc-cidr-block        = "10.16.0.0/16"
-vpc-name              = "vpc"
-igw-name              = "igw"
-pub-subnet-count      = 3
-pub-cidr-block        = ["10.16.0.0/20", "10.16.16.0/20", "10.16.32.0/20"]
-pub-availability-zone = ["us-east-1a", "us-east-1b", "us-east-1c"]
-pub-sub-name          = "subnet-public"
-pri-subnet-count      = 3
-pri-cidr-block        = ["10.16.128.0/20", "10.16.144.0/20", "10.16.160.0/20"]
-pri-availability-zone = ["us-east-1a", "us-east-1b", "us-east-1c"]
-pri-sub-name          = "subnet-private"
-public-rt-name        = "public-route-table"
-private-rt-name       = "private-route-table"
-eip-name              = "elasticip-ngw"
-ngw-name              = "ngw"
-eks-sg                = "eks-sg"
+# Environment and Region
+env         = "dev"
+location    = "eastus"  # Equivalent to aws-region
 
-# EKS
-is-eks-cluster-enabled     = true
-cluster-version            = "1.29"
-cluster-name               = "eks-cluster"
-endpoint-private-access    = true
-endpoint-public-access     = false
-ondemand_instance_types    = ["t3a.medium"]
-spot_instance_types        = ["c5a.large", "c5a.xlarge", "m5a.large", "m5a.xlarge", "c5.large", "m5.large", "t3a.large", "t3a.xlarge", "t3a.medium"]
-desired_capacity_on_demand = "1"
-min_capacity_on_demand     = "1"
-max_capacity_on_demand     = "5"
-desired_capacity_spot      = "1"
-min_capacity_spot          = "1"
-max_capacity_spot          = "10"
+# Virtual Network (VNet) and Subnets
+vnet_cidr           = "10.16.0.0/16"
+vnet_name           = "vnet"
+subnet_count        = 3
+subnet_cidr_blocks  = ["10.16.0.0/20", "10.16.16.0/20", "10.16.32.0/20"]
+subnet_names        = ["subnet-1", "subnet-2", "subnet-3"]
+
+# AKS Cluster Configuration
+is_aks_cluster_enabled = true
+cluster_version         = "1.29.11"  # Specify an AKS-compatible Kubernetes version
+cluster_name            = "aks-cluster"
+dns_prefix              = "aksdns"
+
+# Node Pool Configuration
+node_pool_name           = "default"
+node_vm_size             = "Standard_DS3_v2"
+node_count               = 3
+min_node_count           = 1
+max_node_count           = 5
+spot_vm_size             = ["Standard_D2_v3", "Standard_D4_v3"]
+spot_min_count           = 1
+spot_max_count           = 10
+
+# Networking
+network_plugin          = "azure"  # Use "azure" or "kubenet" as needed
+network_policy          = "azure"
+service_cidr            = "10.0.0.0/16"
+dns_service_ip          = "10.0.0.10"
+docker_bridge_cidr      = "172.17.0.1/16"
+
+# Add-ons
 addons = [
   {
-    name    = "vpc-cni",
-    version = "v1.18.1-eksbuild.1"
+    name    = "azure-policy"
+    version = "latest"
   },
   {
-    name    = "coredns"
-    version = "v1.11.1-eksbuild.9"
+    name    = "http-application-routing"
+    version = "latest"
   },
   {
-    name    = "kube-proxy"
-    version = "v1.29.3-eksbuild.2"
-  },
-  {
-    name    = "aws-ebs-csi-driver"
-    version = "v1.30.0-eksbuild.1"
+    name    = "azure-keyvault-secrets-provider"
+    version = "latest"
   }
-  # Add more addons as needed
+  # Add more Azure-specific add-ons as needed
 ]
+
+# Tags for Resources
+tags = {
+  environment = "dev"
+  project     = "azure-aks-project"
+}
