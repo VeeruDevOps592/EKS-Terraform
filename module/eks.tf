@@ -1,111 +1,105 @@
-resource "aws_eks_cluster" "eks" {
+# AKS Cluster
+resource "azurerm_kubernetes_cluster" "aks" {
+  count = var.is-aks-cluster-enabled == true ? 1 : 0
 
-  count    = var.is-eks-cluster-enabled == true ? 1 : 0
-  name     = var.cluster-name
-  role_arn = aws_iam_role.eks-cluster-role[count.index].arn
-  version  = var.cluster-version
+  name                = var.cluster_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  dns_prefix          = "${var.cluster_name}-dns"
+  kubernetes_version  = var.cluster_version
 
-  vpc_config {
-    subnet_ids              = [aws_subnet.private-subnet[0].id, aws_subnet.private-subnet[1].id, aws_subnet.private-subnet[2].id]
-    endpoint_private_access = var.endpoint-private-access
-    endpoint_public_access  = var.endpoint-public-access
-    security_group_ids      = [aws_security_group.eks-cluster-sg.id]
+  default_node_pool {
+    name                = "default"
+    vm_size             = var.ondemand_instance_types[0]
+    enable_auto_scaling = true
+    min_count           = var.min_capacity_on_demand
+    max_count           = var.max_capacity_on_demand
+    vnet_subnet_id      = azurerm_subnet.private_subnet[0].id
+    tags = {
+      "Name" = "${var.cluster_name}-ondemand-nodes"
+    }
   }
 
+  # Network Configuration
+  network_profile {
+    network_plugin = "azure" # Use "azure" or "kubenet" based on your setup
+    network_policy = "azure"
+    load_balancer_sku = "standard"
+  }
 
-  access_config {
-    authentication_mode                         = "CONFIG_MAP"
-    bootstrap_cluster_creator_admin_permissions = true
+  role_based_access_control {
+    enabled = true
+  }
+
+  identity {
+    type = "SystemAssigned"
   }
 
   tags = {
-    Name = var.cluster-name
+    Name = var.cluster_name
     Env  = var.env
   }
 }
 
-# OIDC Provider
-resource "aws_iam_openid_connect_provider" "eks-oidc" {
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.eks-certificate.certificates[0].sha1_fingerprint]
-  url             = data.tls_certificate.eks-certificate.url
-}
-
-
-# AddOns for EKS Cluster
-resource "aws_eks_addon" "eks-addons" {
-  for_each      = { for idx, addon in var.addons : idx => addon }
-  cluster_name  = aws_eks_cluster.eks[0].name
-  addon_name    = each.value.name
-  addon_version = each.value.version
-
-  depends_on = [
-    aws_eks_node_group.ondemand-node,
-    aws_eks_node_group.spot-node
-  ]
-}
-
-# NodeGroups
-resource "aws_eks_node_group" "ondemand-node" {
-  cluster_name    = aws_eks_cluster.eks[0].name
-  node_group_name = "${var.cluster-name}-on-demand-nodes"
-
-  node_role_arn = aws_iam_role.eks-nodegroup-role[0].arn
-
-  scaling_config {
-    desired_size = var.desired_capacity_on_demand
-    min_size     = var.min_capacity_on_demand
-    max_size     = var.max_capacity_on_demand
-  }
-
-
-  subnet_ids = [aws_subnet.private-subnet[0].id, aws_subnet.private-subnet[1].id, aws_subnet.private-subnet[2].id]
-
-  instance_types = var.ondemand_instance_types
-  capacity_type  = "ON_DEMAND"
-  labels = {
-    type = "ondemand"
-  }
-
-  update_config {
-    max_unavailable = 1
-  }
-  tags = {
-    "Name" = "${var.cluster-name}-ondemand-nodes"
-  }
-
-  depends_on = [aws_eks_cluster.eks]
-}
-
-resource "aws_eks_node_group" "spot-node" {
-  cluster_name    = aws_eks_cluster.eks[0].name
-  node_group_name = "${var.cluster-name}-spot-nodes"
-
-  node_role_arn = aws_iam_role.eks-nodegroup-role[0].arn
-
-  scaling_config {
-    desired_size = var.desired_capacity_spot
-    min_size     = var.min_capacity_spot
-    max_size     = var.max_capacity_spot
-  }
-
-
-  subnet_ids = [aws_subnet.private-subnet[0].id, aws_subnet.private-subnet[1].id, aws_subnet.private-subnet[2].id]
-
-  instance_types = var.spot_instance_types
-  capacity_type  = "SPOT"
-
-  update_config {
-    max_unavailable = 1
-  }
-  tags = {
-    "Name" = "${var.cluster-name}-spot-nodes"
-  }
-  labels = {
+# Node Pools for Spot Instances
+resource "azurerm_kubernetes_cluster_node_pool" "spot_node" {
+  count               = var.is_aks_cluster_enabled == true ? 1 : 0
+  name                = "spot"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks[0].id
+  vm_size             = var.spot_instance_types[0]
+  enable_auto_scaling = true
+  min_count           = var.min_capacity_spot
+  max_count           = var.max_capacity_spot
+  vnet_subnet_id      = azurerm_subnet.private_subnet[1].id
+  node_labels = {
     type      = "spot"
     lifecycle = "spot"
   }
-  disk_size = 50
+  node_taints = ["lifecycle=spot:NoSchedule"]
 
-  depends_on = [aws_eks_cluster.eks]
+  tags = {
+    "Name" = "${var.cluster_name}-spot-nodes"
+  }
+}
+
+# Virtual Network and Subnets
+resource "azurerm_virtual_network" "vnet" {
+  name                = var.vnet_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  address_space       = [var.vnet_cidr]
+
+  tags = {
+    Name = var.vnet_name
+    Env  = var.env
+  }
+}
+
+resource "azurerm_subnet" "private_subnet" {
+  count                = length(var.subnet_cidr_blocks)
+  name                 = "${var.cluster_name}-subnet-${count.index + 1}"
+  resource_group_name  = azurerm_virtual_network.vnet.resource_group_name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefix       = element(var.subnet_cidr_blocks, count.index)
+
+  tags = {
+    Name = "subnet-${count.index + 1}"
+    Env  = var.env
+  }
+}
+
+# Add-ons (Optional)
+resource "azurerm_kubernetes_cluster_addon_profile" "aks_addons" {
+  count                = var.is_aks_cluster_enabled == true ? 1 : 0
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks[0].id
+
+  addon_profile {
+    oms_agent {
+      enabled = true
+      log_analytics_workspace_id = var.log_analytics_workspace_id
+    }
+    azure_policy {
+      enabled = true
+    }
+  }
 }
